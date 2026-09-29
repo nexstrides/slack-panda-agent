@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -94,6 +95,10 @@ func HandleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleMessage(event *slackevents.MessageEvent) {
+	if event.BotID != "" || event.SubType == "bot_message" {
+		return
+	}
+
 	client := slack.New(slackBotToken)
 	response := fmt.Sprintf("Echo: %s", event.Text)
 
@@ -143,23 +148,26 @@ func HandleCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := sv.Ensure(); err != nil {
+		log.Printf("slash command signature check failed: %v", err)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
 
-	s, err := slack.SlashCommandParse(body)
+	r.Body = io.NopCloser(bytes.NewBuffer(body))
+	s, err := slack.SlashCommandParse(r)
 	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
+		log.Printf("slash command parse failed: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	response := slack.SlashCommandResponse{
-		ResponseType: slack.ResponseTypeInChannel,
-		Text:         fmt.Sprintf("Command received: `%s` with text: `%s`", s.Command, s.Text),
-	}
+	log.Printf("slash command %s from %s: %s", s.Command, s.UserName, s.Text)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]string{
+		"response_type": slack.ResponseTypeInChannel,
+		"text":          fmt.Sprintf("Command received: `%s` with text: `%s`", s.Command, s.Text),
+	})
 }
 
 func HandleHealth(w http.ResponseWriter, r *http.Request) {
@@ -170,10 +178,17 @@ func HandleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func logRequest(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("%s %s", r.Method, r.URL.Path)
+		next(w, r)
+	}
+}
+
 func main() {
-	http.HandleFunc("/slack/events", HandleEvents)
-	http.HandleFunc("/slack/commands", HandleCommand)
-	http.HandleFunc("/health", HandleHealth)
+	http.HandleFunc("/slack/events", logRequest(HandleEvents))
+	http.HandleFunc("/slack/commands", logRequest(HandleCommand))
+	http.HandleFunc("/health", logRequest(HandleHealth))
 
 	log.Printf("Slack Bot listening on port %s", port)
 	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), nil); err != nil {
