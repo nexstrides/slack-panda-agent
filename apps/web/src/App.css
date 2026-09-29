@@ -1,0 +1,139 @@
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.header {
+  text-align: center;
+  color: white;
+  margin-bottom: 40px;
+}
+
+.header h1 {
+  font-size: 2.5em;
+  margin-bottom: 10px;
+}
+
+.header p {
+  font-size: 1.1em;
+  opacity: 0.9;
+}
+
+.status-section,
+.test-section,
+.info-section {
+  background: white;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.status-section h2,
+.test-section h2,
+.info-section h2 {
+  margin-bottom: 15px;
+  color: #333;
+  font-size: 1.3em;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-weight: bold;
+  margin-bottom: 10px;
+}
+
+.status-badge.connected {
+  background-color: #10b981;
+  color: white;
+}
+
+.status-badge.disconnected {
+  background-color: #ef4444;
+  color: white;
+}
+
+.status-text {
+  color: #666;
+  font-size: 0.9em;
+}
+
+.input-group {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.input-group input {
+  flex: 1;
+  padding: 10px;
+  border: 2px solid #e5e7eb;
+  border-radius: 5px;
+  font-size: 1em;
+  transition: border-color 0.3s;
+}
+
+.input-group input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.input-group button {
+  padding: 10px 20px;
+  background-color: #667eea;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: background-color 0.3s;
+}
+
+.input-group button:hover {
+  background-color: #5568d3;
+}
+
+.response-box {
+  background-color: #f3f4f6;
+  border-left: 4px solid #667eea;
+  padding: 15px;
+  border-radius: 5px;
+  margin-top: 15px;
+}
+
+.response-box h3 {
+  color: #333;
+  margin-bottom: 10px;
+  font-size: 0.95em;
+}
+
+.response-box p {
+  color: #555;
+  word-break: break-word;
+}
+
+.info-section ul {
+  list-style: none;
+  padding-left: 0;
+}
+
+.info-section li {
+  padding: 8px 0;
+  color: #555;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.info-section li:last-child {
+  border-bottom: none;
+}
+
+.footer {
+  text-align: center;
+  color: white;
+  opacity: 0.8;
+  margin-top: 40px;
+  font-size: 0.9em;
+}

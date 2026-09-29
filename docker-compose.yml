@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  slack-bot:
+    build:
+      context: .
+      dockerfile: services/slack-bot/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+      - PYTHON_API_URL=http://python-api:8000
+      - PORT=3000
+    depends_on:
+      - python-api
+    networks:
+      - pandaagent-network
+
+  python-api:
+    build:
+      context: services/python-api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - CLAUDE_MODEL=${CLAUDE_MODEL}
+      - PORT=8000
+    networks:
+      - pandaagent-network
+
+  web:
+    build:
+      context: apps/web
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - PORT=3001
+    networks:
+      - pandaagent-network
+
+networks:
+  pandaagent-network:
+    driver: bridge
