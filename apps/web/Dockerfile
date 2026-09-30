@@ -2,11 +2,11 @@ FROM node:18-alpine AS builder
 
 WORKDIR /app
 
-COPY apps/web/package*.json ./
+COPY package*.json ./
 
 RUN npm ci
 
-COPY apps/web .
+COPY . .
 
 RUN npm run build
 
@@ -14,9 +14,9 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-COPY apps/web/package*.json ./
+COPY package*.json ./
 
-RUN npm ci --only=production
+RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
