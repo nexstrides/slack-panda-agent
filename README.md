@@ -15,14 +15,13 @@ A multi-service Slack AI agent built with TypeScript, Go, Python, and Claude AI 
 Landing page and settings dashboard for configuring the agent.
 
 ### 2. Slack Bot (Go)
-- Handles Slack events (mentions, messages, commands)
-- Processes slash commands
-- Routes requests to Python API
-- Sends notifications
+- Handles Slack events (mentions, DMs, commands)
+- Stores chat history with the Python API
+- Replies in the same channel, including DMs
 
 ### 3. Python API
-- Claude AI integration
-- Business logic and response generation
+- Slack history store and backfill
+- Claude answers grounded in who / what / where / when
 - Logging and analytics
 
 ## Quick Start
@@ -71,12 +70,12 @@ See `.env.example` for required environment variables:
 
 ## Features (MVP)
 
-- ✅ Respond to mentions in Slack channels
-- ✅ Process slash commands
-- ✅ Echo responses (basic validation)
-- ✅ Notification system for mentions
+- ✅ Study Slack chat history (who, what, which channel, when)
+- ✅ Answer questions from that history
+- ✅ Reply in the same channel, including DMs
+- ✅ Respond to @mentions and `/panda`
 - ✅ Settings page (landing)
-- 🔄 Claude AI integration (WIP)
+- 🔄 Claude AI integration (requires `CLAUDE_API_KEY`)
 
 ## Project Structure
 

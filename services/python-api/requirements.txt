@@ -4,3 +4,4 @@ python-dotenv==1.0.0
 anthropic==0.7.0
 pydantic==2.5.0
 httpx==0.25.1
+slack_sdk==3.27.1

@@ -2,37 +2,31 @@
 
 ## System Overview
 
-PandaAgent is a multi-service Slack AI agent with the following components:
+PandaAgent is a Slack teammate that studies workspace chat history and answers questions in the same channel where you ask, including DMs.
 
 - Slack workspace
 - Go Slack bot
-- Python FastAPI service
+- Python FastAPI service with a local history store
 - React frontend
-- Claude AI integration
-
-## Component Details
-
-### Slack Bot (Go)
-- Receives events and slash commands
-- Verifies Slack signatures
-- Echoes messages for the MVP
-- Sends responses to Slack
-
-### Python API (FastAPI)
-- Exposes `/health`, `/echo`, `/ask-claude`, `/process-message`
-- Integrates with Anthropic Claude API
-- Runs business logic
-
-### Web Frontend (React + TS)
-- Landing page
-- API health status
-- Message testing UI
+- Claude for answers grounded in that history
 
 ## Flow
 
-1. User mentions bot in Slack
-2. Slack sends event to `/slack/events`
-3. Go bot validates the request
-4. Go bot replies with an echo message
-5. Python API is ready to route more advanced logic
-6. Future steps: add Claude prompts and persistent memory
+1. Slack sends message, mention, and slash-command events to the Go bot.
+2. The bot verifies the request, stores the message with the Python API, and returns 200 quickly.
+3. On startup, Python also backfills recent history from channels the bot can read.
+4. If the user asked a question (`@PandaAgent`, DM, or `/panda`), Python retrieves matching history (who, what, which channel, when) and asks Claude.
+5. The Go bot posts the answer back in the same Slack channel or DM.
+
+## Slack Bot (Go)
+
+- Verifies Slack signatures
+- Ingests channel, group, and DM messages
+- Answers in DMs, on @mentions, and for `/panda`
+- Does not echo every channel message
+
+## Python API (FastAPI)
+
+- SQLite history of Slack messages
+- Slack history backfill (`conversations.list` / `conversations.history`)
+- `/ask` uses retrieved history as Claude context

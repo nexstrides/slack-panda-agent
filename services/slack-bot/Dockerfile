@@ -4,10 +4,9 @@ WORKDIR /app
 
 COPY services/slack-bot/go.mod .
 COPY services/slack-bot/go.sum* .
-
 RUN go mod download || true
 
-COPY services/slack-bot/main.go .
+COPY services/slack-bot/*.go .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o slack-bot .
 

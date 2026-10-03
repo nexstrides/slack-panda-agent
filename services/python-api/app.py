@@ -1,17 +1,22 @@
-import os
 import logging
+import os
+import threading
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
-import anthropic
+
+from agent import answer_question
+from history_store import count_messages, init_db
+from slack_history import SlackDirectory, backfill, record_event
 
 load_dotenv("../../.env")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="PandaAgent API", version="0.1.0")
+app = FastAPI(title="PandaAgent API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,92 +26,119 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-claude_api_key = os.getenv("CLAUDE_API_KEY")
-claude_model = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+directory = SlackDirectory(os.getenv("SLACK_BOT_TOKEN"))
 
-if not claude_api_key:
-    logger.warning("CLAUDE_API_KEY not set - Claude features will be unavailable")
-    client = None
-else:
-    client = anthropic.Anthropic(api_key=claude_api_key)
 
 class MessageRequest(BaseModel):
     text: str
     channel: str | None = None
     user: str | None = None
 
+
+class AskRequest(BaseModel):
+    text: str
+    channel_id: str | None = None
+    channel_type: str | None = None
+    user_id: str | None = None
+    user_name: str | None = None
+
+
+class IngestRequest(BaseModel):
+    channel_id: str
+    ts: str
+    text: str = ""
+    user_id: str | None = None
+    user_name: str | None = None
+    channel_name: str | None = None
+    channel_type: str | None = None
+    thread_ts: str | None = None
+
+
 class MessageResponse(BaseModel):
     response: str
     status: str
 
+
 class HealthResponse(BaseModel):
     status: str
     service: str
+    messages: int = 0
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+    threading.Thread(target=_startup_backfill, daemon=True).start()
+
+
+def _startup_backfill() -> None:
+    try:
+        backfill(directory)
+    except Exception as exc:
+        logger.error("Startup backfill failed: %s", exc)
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
     return {
         "status": "ok",
-        "service": "python-api"
+        "service": "python-api",
+        "messages": count_messages(),
     }
+
 
 @app.post("/echo", response_model=MessageResponse)
 async def echo(request: MessageRequest):
-    logger.info(f"Echo request: {request.text}")
     return {
         "response": f"Echo: {request.text}",
-        "status": "success"
+        "status": "success",
     }
+
+
+@app.post("/history/ingest")
+async def ingest(request: IngestRequest):
+    record_event(directory, request.model_dump())
+    return {"status": "ok"}
+
+
+@app.post("/ask", response_model=MessageResponse)
+async def ask(request: AskRequest):
+    if not request.text.strip():
+        raise HTTPException(status_code=400, detail="Question text is required")
+    logger.info("Ask from %s in %s: %s", request.user_id, request.channel_id, request.text)
+    response = answer_question(request.text, request.user_id, request.user_name, request.channel_id)
+    return {"response": response, "status": "success"}
+
 
 @app.post("/ask-claude", response_model=MessageResponse)
 async def ask_claude(request: MessageRequest):
-    if not client:
-        raise HTTPException(status_code=503, detail="Claude API not configured")
+    response = answer_question(request.text, request.user, None)
+    return {"response": response, "status": "success"}
 
-    try:
-        logger.info(f"Claude request: {request.text}")
-        message = client.messages.create(
-            model=claude_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": request.text}]
-        )
-        response_text = message.content[0].text
-
-        return {
-            "response": response_text,
-            "status": "success"
-        }
-    except Exception as e:
-        logger.error(f"Claude API error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error calling Claude API: {str(e)}")
 
 @app.post("/process-message", response_model=MessageResponse)
 async def process_message(request: MessageRequest):
-    try:
-        logger.info(f"Processing message: {request.text} from {request.user}")
-        response = f"Processed: {request.text}"
-        return {
-            "response": response,
-            "status": "success"
-        }
-    except Exception as e:
-        logger.error(f"Error processing message: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+    return await ask(
+        AskRequest(text=request.text, channel_id=request.channel, user_id=request.user)
+    )
+
 
 @app.get("/")
 async def root():
     return {
         "name": "PandaAgent API",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "endpoints": {
             "health": "/health",
+            "ask": "/ask",
+            "history_ingest": "/history/ingest",
             "echo": "/echo",
-            "ask_claude": "/ask-claude",
-            "process_message": "/process-message"
-        }
+        },
     }
+
 
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)

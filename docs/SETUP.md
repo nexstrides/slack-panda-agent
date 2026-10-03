@@ -8,38 +8,59 @@ Complete setup instructions for getting PandaAgent running locally.
 - Python 3.10+
 - Node.js 18+
 - Slack Workspace with admin access
+- Anthropic Claude API key (for history-aware answers)
 
 ## Step 1: Slack App Setup
 
-1. Go to Slack API Dashboard
-2. Click "Create New App"
-3. Choose "From scratch"
-4. Enter app name: `PandaAgent`
-5. Select your workspace
-6. Click "Create App"
+1. Go to [api.slack.com/apps](https://api.slack.com/apps)
+2. Create an app from scratch named `PandaAgent`
+3. Select your workspace
 
-### Configure OAuth & Permissions
+### OAuth & Permissions
 
-1. Go to "OAuth & Permissions"
-2. Under "Scopes" → "Bot Token Scopes", add:
-   - `app_mentions:read`
-   - `chat:write`
-   - `commands`
-   - `channels:read`
-   - `users:read`
-3. Install to workspace
-4. Copy the bot token
+Add these **Bot Token Scopes**, then reinstall the app:
+
+- `app_mentions:read`
+- `chat:write`
+- `commands`
+- `channels:history`
+- `channels:read`
+- `groups:history`
+- `groups:read`
+- `im:history`
+- `im:read`
+- `im:write`
+- `mpim:history`
+- `mpim:read`
+- `users:read`
+
+Invite the bot into each channel it should study: `/invite @PandaAgent`
 
 ### Event Subscriptions
 
-1. Enable events
-2. Set Request URL to: `https://your-domain.com/slack/events`
-3. Subscribe to `app_mention` and `message.channels`
+Enable events and set Request URL to:
+
+`https://your-public-url/slack/events`
+
+Subscribe to bot events:
+
+- `app_mention`
+- `message.channels`
+- `message.groups`
+- `message.im`
+- `message.mpim`
+
+### App Home
+
+Under **App Home**, enable **Messages Tab** and allow users to send DM messages. That is required for questions in a direct channel.
 
 ### Slash Commands
 
-1. Create `/panda`
-2. Request URL: `https://your-domain.com/slack/commands`
+Create `/panda` with Request URL:
+
+`https://your-public-url/slack/commands`
+
+Slack cannot reach `localhost`. Use a tunnel such as `ngrok http 3000` and put that HTTPS URL in the Slack app settings.
 
 ## Step 2: Local Setup
 
@@ -47,41 +68,27 @@ Complete setup instructions for getting PandaAgent running locally.
 cp .env.example .env
 ```
 
-Fill in the values from your Slack app and Claude API key.
+Fill in `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, and `CLAUDE_API_KEY`.
 
 ## Step 3: Run Services
 
-### Slack Bot
+Docker:
+
 ```bash
-cd services/slack-bot
-go mod download
-go run main.go
+docker compose up --build
 ```
 
-### Python API
-```bash
-cd services/python-api
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python app.py
-```
-
-### Web App
-```bash
-cd apps/web
-npm install
-npm run dev
-```
+Or run each service locally as in the root README.
 
 ## Step 4: Test
 
-- Open `http://localhost:3001`
-- Mention the bot in Slack: `@PandaAgent hello`
-- Use slash command: `/panda hello`
+- Mention the bot in a channel: `@PandaAgent what should I do this week?`
+- Open a DM with the bot and ask the same question. The reply stays in that DM.
+- Slash command: `/panda what is outstanding from #eng?`
 
 ## Troubleshooting
 
-- Check `.env` values
-- Ensure Slack app is installed in workspace
-- Verify ngrok tunnel if using local webhooks
+- No reply: Slack Request URLs must be the public HTTPS tunnel, not localhost
+- Empty answers: invite the bot to the channels, add history scopes, and reinstall the app
+- Signature errors: `SLACK_SIGNING_SECRET` does not match the Slack app
+- Weak answers: set `CLAUDE_API_KEY`

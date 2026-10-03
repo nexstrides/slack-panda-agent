@@ -4,10 +4,8 @@ Handles all Slack event processing, command handling, and bot responses.
 
 ## Features
 
-- App mention detection
-- Slash command processing
-- Message event handling
-- Echo responses (MVP)
+- Ingests channel and DM history for the Python agent
+- Answers @mentions, DMs, and `/panda` in the same conversation
 - Signature verification
 
 ## Setup

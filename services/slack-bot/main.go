@@ -8,6 +8,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/slack-go/slack"
@@ -19,6 +22,9 @@ var (
 	slackSigningSecret string
 	pythonAPIURL       string
 	port               string
+	botUserID          string
+	mentionPattern     *regexp.Regexp
+	httpClient         = &http.Client{Timeout: 90 * time.Second}
 )
 
 func init() {
@@ -26,18 +32,29 @@ func init() {
 
 	slackBotToken = os.Getenv("SLACK_BOT_TOKEN")
 	slackSigningSecret = os.Getenv("SLACK_SIGNING_SECRET")
-	pythonAPIURL = os.Getenv("PYTHON_API_URL")
+	pythonAPIURL = strings.TrimRight(os.Getenv("PYTHON_API_URL"), "/")
 	port = os.Getenv("SLACK_BOT_PORT")
-
+	if port == "" {
+		port = os.Getenv("PORT")
+	}
 	if port == "" {
 		port = "3000"
 	}
-
+	if pythonAPIURL == "" {
+		pythonAPIURL = "http://localhost:8000"
+	}
 	if slackBotToken == "" || slackSigningSecret == "" {
 		log.Fatal("SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET must be set")
 	}
 
-	log.Printf("Slack Bot initialized - Port: %s", port)
+	api := slack.New(slackBotToken)
+	identity, err := api.AuthTest()
+	if err != nil {
+		log.Fatalf("Slack auth.test failed: %v", err)
+	}
+	botUserID = identity.UserID
+	mentionPattern = regexp.MustCompile(fmt.Sprintf(`<@%s>`, regexp.QuoteMeta(botUserID)))
+	log.Printf("Slack Bot initialized as %s (%s) on port %s", identity.User, botUserID, port)
 }
 
 func HandleEvents(w http.ResponseWriter, r *http.Request) {
@@ -46,19 +63,8 @@ func HandleEvents(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-
-	sv, err := slack.NewSecretsVerifier(r.Header, slackSigningSecret)
-	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	if _, err := sv.Write(body); err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	if err := sv.Ensure(); err != nil {
+	if err := verifySlackSignature(r.Header, body); err != nil {
+		log.Printf("event signature check failed: %v", err)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}
@@ -70,58 +76,52 @@ func HandleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if eventsAPIEvent.Type == slackevents.URLVerification {
-		var r *slackevents.ChallengeResponse
-		err := json.Unmarshal([]byte(body), &r)
-		if err != nil {
+		var challenge slackevents.ChallengeResponse
+		if err := json.Unmarshal(body, &challenge); err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text")
-		w.Write([]byte(r.Challenge))
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(challenge.Challenge))
 		return
-	}
-
-	if eventsAPIEvent.Type == slackevents.CallbackEvent {
-		innerEvent := eventsAPIEvent.InnerEvent
-		switch ev := innerEvent.Data.(type) {
-		case *slackevents.MessageEvent:
-			HandleMessage(ev)
-		case *slackevents.AppMentionEvent:
-			HandleMention(ev)
-		}
 	}
 
 	w.WriteHeader(http.StatusOK)
-}
-
-func HandleMessage(event *slackevents.MessageEvent) {
-	if event.BotID != "" || event.SubType == "bot_message" {
+	if eventsAPIEvent.Type != slackevents.CallbackEvent {
 		return
 	}
 
-	client := slack.New(slackBotToken)
-	response := fmt.Sprintf("Echo: %s", event.Text)
+	go func() {
+		switch ev := eventsAPIEvent.InnerEvent.Data.(type) {
+		case *slackevents.MessageEvent:
+			handleMessage(ev)
+		case *slackevents.AppMentionEvent:
+			handleMention(ev)
+		}
+	}()
+}
 
-	_, _, err := client.PostMessage(
-		event.Channel,
-		slack.MsgOptionText(response, false),
-	)
-	if err != nil {
-		log.Printf("Error posting message: %v", err)
+func handleMessage(event *slackevents.MessageEvent) {
+	if shouldIgnoreMessage(event.BotID, event.User, event.SubType, event.Text) {
+		return
+	}
+
+	ingest(event.Channel, event.TimeStamp, event.ThreadTimeStamp, event.User, event.Text, event.ChannelType)
+
+	// Channel @mentions are handled by app_mention. Answer here only for DMs
+	// that did not also include an @mention, so we do not double-reply.
+	if isDirectMessage(event.Channel, event.ChannelType) && !mentionPattern.MatchString(event.Text) {
+		answerAndReply(event.Channel, event.User, event.Text, event.ChannelType)
 	}
 }
 
-func HandleMention(event *slackevents.AppMentionEvent) {
-	client := slack.New(slackBotToken)
-	response := fmt.Sprintf("Hi <@%s>! You mentioned me. Echo: %s", event.User, event.Text)
-
-	_, _, err := client.PostMessage(
-		event.Channel,
-		slack.MsgOptionText(response, false),
-	)
-	if err != nil {
-		log.Printf("Error posting mention response: %v", err)
+func handleMention(event *slackevents.AppMentionEvent) {
+	if shouldIgnoreMessage("", event.User, "", event.Text) {
+		return
 	}
+	ingest(event.Channel, event.TimeStamp, event.ThreadTimeStamp, event.User, event.Text, "channel")
+	question := mentionPattern.ReplaceAllString(event.Text, "")
+	answerAndReply(event.Channel, event.User, strings.TrimSpace(question), "channel")
 }
 
 func HandleCommand(w http.ResponseWriter, r *http.Request) {
@@ -129,25 +129,12 @@ func HandleCommand(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-
-	sv, err := slack.NewSecretsVerifier(r.Header, slackSigningSecret)
-	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	if _, err := sv.Write(body); err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		return
-	}
-
-	if err := sv.Ensure(); err != nil {
+	if err := verifySlackSignature(r.Header, body); err != nil {
 		log.Printf("slash command signature check failed: %v", err)
 		w.WriteHeader(http.StatusUnauthorized)
 		return
@@ -161,20 +148,148 @@ func HandleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("slash command %s from %s: %s", s.Command, s.UserName, s.Text)
+	w.WriteHeader(http.StatusOK)
+	go func() {
+		question := strings.TrimSpace(s.Text)
+		if question == "" {
+			question = "What should I focus on from recent Slack history?"
+		}
+		ingest(s.ChannelID, fmt.Sprintf("%d.000000", time.Now().Unix()), "", s.UserID, question, "command")
+		answerAndReply(s.ChannelID, s.UserID, question, "command")
+	}()
+}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"response_type": slack.ResponseTypeInChannel,
-		"text":          fmt.Sprintf("Command received: `%s` with text: `%s`", s.Command, s.Text),
-	})
+func shouldIgnoreMessage(botID, user, subtype, text string) bool {
+	if botID != "" || user == botUserID {
+		return true
+	}
+	if subtype != "" && subtype != "file_share" {
+		return true
+	}
+	return strings.TrimSpace(text) == ""
+}
+
+func isDirectMessage(channelID, channelType string) bool {
+	return channelType == "im" || strings.HasPrefix(channelID, "D")
+}
+
+func ingest(channelID, ts, threadTS, userID, text, channelType string) {
+	payload := map[string]string{
+		"channel_id":   channelID,
+		"ts":           ts,
+		"thread_ts":    threadTS,
+		"user_id":      userID,
+		"text":         text,
+		"channel_type": channelType,
+	}
+	if err := postJSON("/history/ingest", payload, 8*time.Second); err != nil {
+		log.Printf("history ingest failed: %v", err)
+	}
+}
+
+func answerAndReply(channelID, userID, question, channelType string) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		question = "What should I do based on recent Slack history?"
+	}
+	log.Printf("answering %s in %s (%s)", userID, channelID, channelType)
+
+	body := map[string]string{
+		"text":         question,
+		"channel_id":   channelID,
+		"channel_type": channelType,
+		"user_id":      userID,
+	}
+	response, err := askPython(body)
+	if err != nil {
+		log.Printf("ask failed: %v", err)
+		response = "I could not answer from chat history right now. Check that the Python API is running and CLAUDE_API_KEY is set."
+	}
+	reply(channelID, response)
+}
+
+func askPython(payload map[string]string) (string, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequest(http.MethodPost, pythonAPIURL+"/ask", bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	out, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 300 {
+		return "", fmt.Errorf("python api status %d: %s", resp.StatusCode, out)
+	}
+	var parsed struct {
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return "", err
+	}
+	return parsed.Response, nil
+}
+
+func postJSON(path string, payload map[string]string, timeout time.Duration) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, pythonAPIURL+path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("status %d: %s", resp.StatusCode, body)
+	}
+	return nil
+}
+
+func reply(channelID, text string) {
+	if len(text) > 3500 {
+		text = text[:3500] + "\n…"
+	}
+	api := slack.New(slackBotToken)
+	_, _, err := api.PostMessage(channelID, slack.MsgOptionText(text, false))
+	if err != nil {
+		log.Printf("error posting to %s: %v", channelID, err)
+	}
+}
+
+func verifySlackSignature(header http.Header, body []byte) error {
+	sv, err := slack.NewSecretsVerifier(header, slackSigningSecret)
+	if err != nil {
+		return err
+	}
+	if _, err := sv.Write(body); err != nil {
+		return err
+	}
+	return sv.Ensure()
 }
 
 func HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "ok",
+		"status":  "ok",
 		"service": "slack-bot",
+		"bot":     botUserID,
 	})
 }
 
